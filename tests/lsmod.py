@@ -13,7 +13,8 @@ class KernelModules(rootfs_boot.RootFSBootTest):
     def runTest(self):
         board.sendline('\nlsmod | wc -l')
         board.expect('lsmod ')
-        board.expect('(\d+)\r\n')
+        #board.expect('(\d+)\r\n')
+        board.expect('(\d+)')
         num = int(board.match.group(1)) - 1 # subtract header line
         board.expect(prompt)
         board.sendline('lsmod | sort')
