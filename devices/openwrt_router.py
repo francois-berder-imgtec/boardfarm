@@ -40,6 +40,7 @@ class OpenWrtRouter(base.BaseDevice):
     prompt = ['root\\@.*:.*#', '/ # ', '@R7500:/# ']
     uprompt = ['ath>', '\(IPQ\) #', 'ar7240>', '\(IPQ40xx\)']
     linux_booted = False
+    saveenv_safe = True
 
     def __init__(self,
                  model,
@@ -59,6 +60,7 @@ class OpenWrtRouter(base.BaseDevice):
 
 
         if connection_type is None:
+            print("\nWARNING: Unknown connection type using ser2net\n")
             connection_type = "ser2net"
 
         self.logfile_read = output
@@ -92,9 +94,11 @@ class OpenWrtRouter(base.BaseDevice):
                 self.expect('Hit any key ')
                 self.sendline('\n\n\n\n\n\n\n') # try really hard
                 self.expect(self.uprompt, timeout=4)
+                # Confirm we are in uboot by typing any command.
+                # If we weren't in uboot, we wouldn't see the command
+                # that we type.
                 self.sendline('echo FOO')
                 self.expect('echo FOO', timeout=4)
-                self.expect('FOO')
                 self.expect(self.uprompt, timeout=4)
                 return
             except Exception as e:
@@ -230,9 +234,15 @@ class OpenWrtRouter(base.BaseDevice):
         for attempt in range(4):
             try:
                 self.expect('U-Boot', timeout=30)
-                self.expect('Hit any key ')
+                i = self.expect(['Hit any key ', 'gpio 17 value 1'])
+                if i == 1:
+                    print("\n\nWARN: possibly need to hold down reset button to break into U-Boot\n\n")
+                    self.expect('Hit any key ')
+
                 self.sendline('\n\n\n\n\n\n\n') # try really hard
-                self.expect(self.uprompt, timeout=4)
+                i = self.expect(['httpd'] + self.uprompt, timeout=4)
+                if i == 0:
+                    self.sendcontrol('c')
                 self.sendline('echo FOO')
                 self.expect('echo FOO')
                 self.expect('FOO')
@@ -298,13 +308,13 @@ class OpenWrtRouter(base.BaseDevice):
     def get_wan_iface(self):
         '''Return name of WAN interface.'''
         self.sendline('\nuci show network.wan.ifname')
-        self.expect('wan.ifname=([a-zA-Z0-9\.-]*)\r\n')
+        self.expect("wan.ifname='?([a-zA-Z0-9\.-]*)'?\r\n")
         return self.match.group(1)
 
     def get_wan_proto(self):
         '''Return protocol of WAN interface, e.g. dhcp.'''
         self.sendline('\nuci show network.wan.proto')
-        self.expect('wan.proto=([a-zA-Z0-9\.-]*)\r\n')
+        self.expect("wan.proto='?([a-zA-Z0-9\.-]*)'?\r\n")
         return self.match.group(1)
 
     def setup_uboot_network(self, TFTP_SERVER="192.168.0.1"):
@@ -317,8 +327,11 @@ class OpenWrtRouter(base.BaseDevice):
         self.expect(self.uprompt)
         time.sleep(30) # running dhcp too soon causes hang
         self.sendline('dhcp')
-        self.expect('DHCP client bound to address', timeout=60)
+        i = self.expect(['Unknown command', 'DHCP client bound to address'], timeout=60)
         self.expect(self.uprompt)
+        if i == 0:
+            self.sendline('setenv ipaddr 192.168.0.2')
+            self.expect(self.uprompt)
         self.sendline('setenv serverip %s' % TFTP_SERVER)
         self.expect(self.uprompt)
         if TFTP_SERVER:
@@ -348,8 +361,9 @@ class OpenWrtRouter(base.BaseDevice):
                 time.sleep(1)
             assert passed
         self.sendline('setenv dumpdir crashdump')
-        self.expect(self.uprompt)
-        self.sendline('saveenv')
+        if self.saveenv_safe:
+            self.expect(self.uprompt)
+            self.sendline('saveenv')
         self.expect(self.uprompt)
 
     def boot_linux(self, rootfs=None):
@@ -358,7 +372,12 @@ class OpenWrtRouter(base.BaseDevice):
 
     def wait_for_linux(self):
         '''Verify Linux starts up.'''
-        self.expect(['Booting Linux', 'Starting kernel ...'], timeout=45)
+        i = self.expect(['Reset Button Push down', 'Booting Linux', 'Starting kernel ...'], timeout=45)
+        if i == 0:
+            self.expect('httpd')
+            self.sendcontrol('c')
+            self.expect(self.uprompt)
+            self.sendline('boot')
         i = self.expect(['Please press Enter to activate this console', 'U-Boot'], timeout=150)
         if i == 1:
             raise Exception('U-Boot came back when booting kernel')
