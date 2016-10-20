@@ -14,7 +14,7 @@ class Logread(rootfs_boot.RootFSBootTest):
     def runTest(self):
         board.sendline('\nlogread')
         board.expect('logread')
-        board.expect('OpenWrt', timeout=5)
+        board.expect('OpenWrt', timeout=15)
         board.expect(prompt)
 
 class DiskUse(rootfs_boot.RootFSBootTest):
